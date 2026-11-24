@@ -1,6 +1,7 @@
+// geo.json (Kartenpunkte) wird nicht vorab geladen, aber beim ersten Abruf gespeichert (Offline-Ersatz).
 // Netz zuerst (damit Updates sofort ankommen), Cache als Offline-Ersatz. API, Logos, Kacheln und Streams gehen immer direkt ins Netz.
 // Bei jeder App-Änderung die Nummer erhöhen: Dann gilt beim nächsten Start die neue Version.
-const CACHE = 'weltradio-v1';
+const CACHE = 'weltradio-v2';
 const FILES = ['./', 'index.html', 'theme.js', 'style.css', 'app.js', 'manifest.json', 'icon.svg', 'icon-192.png', 'icon-512.png'];
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => Promise.all(FILES.map(f => fetch(f, { cache: 'no-cache' }).then(r => { if (r.ok) return c.put(f, r); }).catch(() => {})))));

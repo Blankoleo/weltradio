@@ -1,8 +1,10 @@
-/* Weltradio 1.0 – Live-Radio aus aller Welt.
+/* Weltradio 1.1 – Live-Radio aus aller Welt.
  *
  * Daten: Radio Browser (radio-browser.info), frei und ohne Schlüssel, CORS offen.
  *  - Nur Sender mit https-Stream (url_resolved), lastcheckok=1, hidebroken=true; sortiert nach Beliebtheit (clickcount).
- *  - Beliebteste Sender mit Ortsangabe → Punkte auf der Karte und Vorrat für die Zufallsreise („Alle“).
+ *  - Kartenpunkte: geo.json im Repo (alle Sender mit Ortsangabe, kompakt, wöchentlich per GitHub Action erneuert).
+ *    Gezeichnet wird nur, was im Bild ist – herausgezoomt nur die beliebtesten. Volle Daten erst beim Antippen (byuuid).
+ *  - Zufallsreise „Alle“: Land auslosen, dann dessen beliebteste Sender (kleine Abfrage je Land).
  *  - Genre-Vorräte (tag=…) und Länderlisten werden erst bei Bedarf geholt und im Speicher gehalten.
  * Wiedergabe: EIN <audio>-Element für alles (iOS gibt nur das per Tipp gestartete Element frei).
  * Karte: Leaflet (unpkg) mit preferCanvas → alle Punkte auf einem Canvas statt tausender DOM-Elemente.
@@ -18,7 +20,6 @@ const LS = {
 const $ = s => document.querySelector(s);
 
 // ---------------------------------------------------------------- Konfiguration
-const POOL_SIZE = 3000;     // beliebteste Sender mit Ortsangabe (Karte + Zufallsreise)
 const WINDOW = 2;           // Karten ober-/unterhalb der aktuellen im DOM (→ max. 5)
 const AHEAD = 4;            // nachlegen, wenn weniger als so viele Sender vor einem liegen
 const STALL_MS = 8000;      // so lange darf ein Stream laden, sonst „nicht erreichbar“
@@ -139,17 +140,10 @@ function stations(list, max = Infinity) {
   return out;
 }
 
-let poolP = null;
-function loadPool() {
-  return poolP ||= api(`/json/stations/search?has_geo_info=true&${Q}&limit=${POOL_SIZE}`, 30000)
-    .then(list => stations(list))
-    .catch(e => { poolP = null; throw e; });
-}
 const genrePools = new Map();
 function genrePool(g) {
   const tag = GENRE_BY[g]?.[2];
-  if (!tag) return loadPool();
-  if (!genrePools.has(g)) genrePools.set(g, api(`/json/stations/search?tag=${encodeURIComponent(tag)}&${Q}&limit=500`, 20000)
+  if (!genrePools.has(g)) genrePools.set(g, api(`/json/stations/search?tag=${encodeURIComponent(tag)}&${Q}&limit=300`, 20000)
     .then(l => stations(l)).catch(e => { genrePools.delete(g); throw e; }));
   return genrePools.get(g);
 }
@@ -161,6 +155,24 @@ function loadCountries() {
     .catch(e => { countriesP = null; throw e; });
 }
 const countryStations = cc => cachedApi(`/json/stations/search?countrycode=${cc}&${Q}&limit=80`, 15000).then(l => stations(l, 50));
+// Für die Zufallsreise reicht die Spitze eines Landes (klein, eigener Speicher je Land)
+const tripCountry = new Map();
+function tripCountryStations(cc) {
+  if (!tripCountry.has(cc)) tripCountry.set(cc, api(`/json/stations/search?countrycode=${cc}&${Q}&limit=24`, 12000)
+    .then(l => stations(l, 12)).catch(e => { tripCountry.delete(cc); throw e; }));
+  return tripCountry.get(cc);
+}
+// Ein Sender voll (für Kartenpunkte aus geo.json); kleiner Speicher
+const byIdCache = new Map();
+function stationById(id) {
+  if (!byIdCache.has(id)) {
+    byIdCache.set(id, api('/json/stations/byuuid/' + encodeURIComponent(id), 10000)
+      .then(l => { const r = (l || [])[0]; if (!r) throw new Error('Sender nicht gefunden'); return r; })
+      .catch(e => { byIdCache.delete(id); throw e; }));
+    if (byIdCache.size > 60) byIdCache.delete(byIdCache.keys().next().value);
+  }
+  return byIdCache.get(id);
+}
 // Klickzähler bei Radio Browser (gute Praxis; abschaltbar)
 function countClick(st) {
   if (!countClicks || !st?.id) return;
@@ -434,15 +446,51 @@ function nextStation(list) {
   }
   return null;
 }
+// „Alle“: Länder auslosen (größere etwas häufiger, keins der letzten), je Land eine kleine Abfrage, dort einer der beliebtesten.
+const emptyCC = new Set();
+async function worldStations(n) {
+  const cs = (await loadCountries()).filter(c => !emptyCC.has(c.cc));
+  const out = [];
+  for (let round = 0; round < 3 && out.length < n; round++) {
+    const pool = cs.filter(c => !recentCC.includes(c.cc) && !emptyCC.has(c.cc));
+    const picks = [];
+    while (picks.length < n - out.length && pool.length) {
+      const w = pool.map(c => Math.sqrt(Math.min(c.n, 40)));
+      let r = Math.random() * w.reduce((a, b) => a + b, 0), k = pool.length - 1;
+      for (let j = 0; j < pool.length; j++) { r -= w[j]; if (r <= 0) { k = j; break; } }
+      picks.push(pool.splice(k, 1)[0].cc);
+    }
+    if (!picks.length) { recentCC.length = 0; continue; }
+    const lists = await Promise.allSettled(picks.map(tripCountryStations));
+    lists.forEach((res, k) => {
+      const cc = picks[k];
+      if (res.status !== 'fulfilled') return;
+      if (!res.value.length) { emptyCC.add(cc); return; }
+      const top = res.value.filter(st => !used.has(st.id) && !bad.has(st.id)).slice(0, 6);
+      if (!top.length) { tripCountry.delete(cc); return; }
+      const st = top[Math.min(top.length - 1, Math.floor(Math.random() ** 1.6 * top.length))];
+      used.add(st.id); out.push(st);
+      recentCC.push(cc); if (recentCC.length > 12) recentCC.shift();
+    });
+  }
+  return out;
+}
 function fillTrip(n = 6) {
   if (filling) return filling;
   const gen = tripGen;
   filling = (async () => {
-    const list = await (genre === 'all' ? loadPool() : genrePool(genre));
-    if (gen !== tripGen) return;
-    if (!list.length) throw new Error('leer');
     const was = trip.length;
-    for (let k = 0; k < n; k++) { const st = nextStation(list); if (!st) break; trip.push(st); }
+    if (genre === 'all') {
+      const add = await worldStations(n);
+      if (gen !== tripGen) return;
+      if (!add.length) throw new Error('leer');
+      trip.push(...add);
+    } else {
+      const list = await genrePool(genre);
+      if (gen !== tripGen) return;
+      if (!list.length) throw new Error('leer');
+      for (let k = 0; k < n; k++) { const st = nextStation(list); if (!st) break; trip.push(st); }
+    }
     lastErr = '';
     layout();
     if (!was && trip.length) activate(cur, false);
@@ -622,9 +670,19 @@ $('#genres').addEventListener('click', e => {
 });
 
 // ---------------------------------------------------------------- Karte (Leaflet, ein Canvas)
+// Punkte aus geo.json: [uuid, name, lat, lon, clickcount, cc], nach Beliebtheit sortiert.
+// Gezeichnet wird nur, was im Bild ist (plus Rand), gedeckelt je Zoomstufe → Speicher bleibt flach.
+const DOT_LIMIT = [1500, 1500, 1500, 1800, 2200, 2600, 3000, 3200];  // je Zoomstufe; ab Zoom 8: alles im Bild
+const DOT_MAX = 3500;                                                  // harte Obergrenze für Marker
 let lastDot = 0;
 let map = null, tiles = null, dots = null, renderer = null, selDot = null, leafletP = null, mapCardSt = null;
-const dotIds = new Set();
+let geo = null, geoP = null, redrawTimer = 0;
+const shownDots = new Map();   // uuid → circleMarker (nur die gerade gezeichneten)
+function loadGeo() {
+  return geoP ||= fetch('geo.json').then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+    .then(list => (geo = Array.isArray(list) ? list : []))
+    .catch(e => { geoP = null; throw e; });
+}
 function loadLeaflet() {
   return leafletP ||= new Promise((res, rej) => {
     const css = document.createElement('link');
@@ -647,6 +705,7 @@ function tileUrl() {
 const dotStyle = () => { const c = cssVar('--dot') || '#8fd8ff'; return { radius: 2.4, weight: 4, color: c, opacity: .22, fillColor: c, fillOpacity: .95 }; };
 async function initMap() {
   if (map) return;
+  const geoReady = loadGeo().catch(() => null);   // parallel zur Karte holen
   let L;
   try { L = await loadLeaflet(); } catch { $('#map-count').textContent = 'Karte lädt nicht – Internet?'; return; }
   if (map) return;
@@ -659,28 +718,91 @@ async function initMap() {
   }).addTo(map);
   renderer = L.canvas({ padding: .3, tolerance: 8 });
   dots = L.featureGroup().addTo(map);
-  dots.on('click', e => { const st = e.layer?.st; if (st) { L.DomEvent.stopPropagation(e); lastDot = Date.now(); haptic(); onDot(st); } });
+  dots.on('click', e => { const g = e.layer?.g; if (g) { L.DomEvent.stopPropagation(e); lastDot = Date.now(); haptic(); onDot(g); } });
   map.on('click', () => { if (Date.now() - lastDot > 400) hideMapCard(); });
-  try {
-    const list = await loadPool();
-    addDots(list);
-  } catch { $('#map-count').textContent = 'Sender laden nicht – Internet?'; }
-}
-function addDots(list) {
-  if (!map) return;
-  const style = { ...dotStyle(), renderer };
-  for (const st of list) {
-    if (st.lat == null || st.lng == null || dotIds.has(st.id)) continue;
-    dotIds.add(st.id);
-    const m = window.L.circleMarker([st.lat, st.lng], style);
-    m.st = st;
-    dots.addLayer(m);
+  map.on('moveend zoomend', scheduleRedraw);
+  await geoReady;
+  if (!geo) {
+    $('#map-count').textContent = 'Sender laden nicht – Internet?';
+    // später erneut versuchen (z. B. wieder online)
+    addEventListener('online', () => loadGeo().then(redrawDots).catch(() => {}), { once: true });
+    return;
   }
-  $('#map-count').textContent = `${dotIds.size.toLocaleString('de-DE')} Sender · Punkt antippen`;
+  redrawDots();
 }
-function onDot(st) {
-  playStation(st, 'map');   // Tipp = Geste → darf sofort spielen
-  showMapCard(st);
+function scheduleRedraw() { clearTimeout(redrawTimer); redrawTimer = setTimeout(redrawDots, 120); }
+// Nur Punkte im (etwas erweiterten) Bild, beliebteste zuerst, gedeckelt je Zoom.
+function redrawDots() {
+  if (!map || !geo) return;
+  const L = window.L, z = Math.floor(map.getZoom());
+  const limit = Math.min(DOT_MAX, z >= DOT_LIMIT.length ? Infinity : DOT_LIMIT[z]);
+  const view = map.getBounds(), b = view.pad(.2);
+  const s = Math.max(-90, b.getSouth()), n = Math.min(90, b.getNorth()), w = b.getWest(), e = b.getEast();
+  const vs = view.getSouth(), vn = view.getNorth(), vw = view.getWest(), ve = view.getEast();
+  const allLng = e - w >= 360;
+  const want = new Map();
+  let inView = 0;
+  for (let i = 0; i < geo.length && want.size < limit; i++) {
+    const g = geo[i], lat = g[2];
+    if (lat < s || lat > n) continue;
+    let lng = g[3];
+    if (!allLng) {
+      // Weltkopien (worldCopyJump): Punkt in die sichtbare Kopie schieben
+      if (lng < w) lng += 360 * Math.ceil((w - lng) / 360);
+      else if (lng > e) lng -= 360 * Math.ceil((lng - e) / 360);
+      if (lng < w || lng > e) continue;
+    }
+    want.set(g[0], [g, lng]);
+    if (lat >= vs && lat <= vn && (allLng || (lng >= vw && lng <= ve))) inView++;
+  }
+  for (const [id, m] of shownDots) if (!want.has(id)) { dots.removeLayer(m); shownDots.delete(id); }
+  const style = { ...dotStyle(), renderer };
+  for (const [id, [g, lng]] of want) {
+    const m = shownDots.get(id);
+    if (m) { if (m.getLatLng().lng !== lng) m.setLatLng([g[2], lng]); continue; }
+    const nm = L.circleMarker([g[2], lng], style);
+    nm.g = g;
+    shownDots.set(id, nm);
+    dots.addLayer(nm);
+  }
+  $('#map-count').textContent = `${geo.length.toLocaleString('de-DE')} Sender · ${inView.toLocaleString('de-DE')} im Bild`;
+}
+// Stille (0,1 s) als Blob: gibt das Audio-Element im Tipp frei, während die Senderdaten noch laden (iOS)
+let silentUrl = '';
+function unlockAudio() {
+  if (unlocked || (now && wantPlay)) return;
+  try {
+    if (!silentUrl) {
+      const n = 800, buf = new ArrayBuffer(44 + n * 2), d = new DataView(buf);
+      const str = (o, t) => [...t].forEach((c, k) => d.setUint8(o + k, c.charCodeAt(0)));
+      str(0, 'RIFF'); d.setUint32(4, 36 + n * 2, true); str(8, 'WAVEfmt '); d.setUint32(16, 16, true); d.setUint16(20, 1, true); d.setUint16(22, 1, true);
+      d.setUint32(24, 8000, true); d.setUint32(28, 16000, true); d.setUint16(32, 2, true); d.setUint16(34, 16, true); str(36, 'data'); d.setUint32(40, n * 2, true);
+      silentUrl = URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
+    }
+    pa.src = silentUrl;
+    const p = pa.play();
+    if (p) p.then(() => { unlocked = true; }).catch(() => {});
+  } catch {}
+}
+// Antippen: Karte sofort mit dem, was geo.json weiß; volle Daten holen, dann spielen.
+let dotReq = 0;
+function geoStation(g) { return { id: g[0], name: g[1], url: '', logo: '', cc: g[5] || '', country: '', state: '', tags: [], codec: '', br: 0, hls: 0, lat: g[2], lng: g[3], clicks: g[4], stub: true }; }
+async function onDot(g) {
+  const req = ++dotReq;
+  const stub = geoStation(g);
+  unlockAudio();
+  showMapCard(stub);
+  try {
+    const r = await stationById(g[0]);
+    if (req !== dotReq || mapCardSt !== stub) return;
+    const st = playable(r) ? toSt(r) : null;
+    if (!st) { toast('Dieser Sender lässt sich hier nicht abspielen'); return; }
+    if (st.lat == null) { st.lat = g[2]; st.lng = g[3]; }
+    playStation(st, 'map');
+    showMapCard(st);
+  } catch {
+    if (req === dotReq) toast(navigator.onLine ? 'Sender kommt gerade nicht an' : 'Offline – Radio braucht Internet');
+  }
 }
 function markDot(st) {
   if (!map) return;
@@ -716,7 +838,10 @@ $('#map-card').addEventListener('click', e => {
   haptic();
   const a = b.dataset.a;
   if (a === 'fav') toggleFav(st, b);
-  else if (a === 'play') { if (now === st && (pstate === 'playing' || pstate === 'loading')) pause(); else playStation(st, 'map'); }
+  else if (a === 'play') {
+    if (st.stub) { const g = geo?.find(x => x[0] === st.id); if (g) onDot(g); }
+    else if (now === st && (pstate === 'playing' || pstate === 'loading')) pause(); else playStation(st, 'map');
+  }
   else if (a === 'close') hideMapCard();
   else if (a === 'country') openCountry(st.cc);
 });
@@ -724,7 +849,6 @@ async function showOnMap(st) {
   showView('map');
   await initMap();
   if (!map || st.lat == null) return;
-  addDots([st]);
   map.invalidateSize();
   map.flyTo([st.lat, st.lng], Math.max(map.getZoom(), 6), { duration: document.documentElement.classList.contains('calm') ? 0 : 1.1 });
   showMapCard(st);
@@ -770,10 +894,9 @@ async function openCountry(cc) {
     $('#cp-body').innerHTML = countryList.length ? `<ul class="list">${countryList.map(itemHTML).join('')}</ul>` : '<p class="empty">Hier gibt es leider keine https-Sender.</p>';
     syncLists();
     // Karte auf das Land ausrichten
-    const geo = countryList.filter(st => st.lat != null);
-    if (map && geo.length) {
-      addDots(geo);
-      const b = window.L.latLngBounds(geo.map(st => [st.lat, st.lng]));
+    const pts = countryList.filter(st => st.lat != null);
+    if (map && pts.length) {
+      const b = window.L.latLngBounds(pts.map(st => [st.lat, st.lng]));
       map.flyToBounds(b.pad(.2), { maxZoom: 6, paddingBottomRight: [0, innerHeight * .45], duration: .9 });
     }
   } catch { if (cpCountry === cc) $('#cp-body').innerHTML = '<p class="empty">Die Sender kommen gerade nicht an.</p>'; }
@@ -971,7 +1094,6 @@ addEventListener('resize', () => { clearTimeout(resizeTimer); resizeTimer = setT
 // ---------------------------------------------------------------- Start
 updateFavCount();
 renderGenres();
-loadPool().catch(() => {});      // Vorrat sofort holen: Karte und Reise brauchen ihn
 fillTrip();
 const firstStart = !LS.get('onb', false);
 showView(firstStart ? 'trip' : LS.get('view', 'map'));

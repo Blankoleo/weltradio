@@ -1,0 +1,24 @@
+name: geo.json aktualisieren
+on:
+  schedule:
+    - cron: '17 4 * * 1'   # montags 04:17 UTC
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  geo:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python3 tools/build-geo.py
+      - name: Nur bei Änderung committen
+        run: |
+          if git diff --quiet -- geo.json; then echo "Keine Änderung"; exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add geo.json
+          git commit -m "geo.json aktualisiert"
+          git push

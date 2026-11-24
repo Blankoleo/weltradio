@@ -116,6 +116,8 @@ body:has(#view-trip.active) .aurora i, body:has(#view-map.active) .aurora i, .ca
 .map-pill b { font: 700 19px/1.1 var(--serif); }
 .map-pill small { color: var(--muted); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .map-btn { flex: none; padding: 0 16px; min-height: 48px; font-weight: 650; font-size: 14.5px; transition: transform .25s var(--spring); }
+.map-btn { display: inline-flex; align-items: center; gap: 7px; }
+.map-btn-i { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; flex: none; }
 .map-btn:active { transform: scale(.94); }
 
 .map-card { position: absolute; z-index: 810; top: calc(var(--sat) + 70px); left: 12px; right: 12px; display: flex; gap: 12px; align-items: center; padding: 10px 10px 10px 12px;
