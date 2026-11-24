@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <!-- Sicherheitsregel: nur eigene Skripte plus Leaflet (unpkg, mit Prüfsumme); Daten nur von Radio Browser, Kacheln von Esri. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://unpkg.com; style-src 'self' 'unsafe-inline' https://unpkg.com; img-src 'self' data: blob: https:; media-src https: blob:; connect-src 'self' https://*.api.radio-browser.info; object-src 'none'; frame-src 'none'; base-uri 'self'; form-action 'self'">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#07080d">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Weltradio">
+  <title>Weltradio – Live-Radio aus aller Welt</title>
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <link rel="preconnect" href="https://de1.api.radio-browser.info">
+  <link rel="preconnect" href="https://unpkg.com">
+  <link rel="preconnect" href="https://server.arcgisonline.com">
+  <script src="theme.js"></script>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="aurora" aria-hidden="true"><i></i><i></i><i></i></div>
+
+  <!-- 1 · Karte -->
+  <main id="view-map" class="view">
+    <h1 class="vh">Weltkarte</h1>
+    <div id="map" class="map" aria-label="Weltkarte mit Radiosendern"></div>
+    <div class="map-top">
+      <div class="map-pill"><b>Weltkarte</b><small id="map-count">Lädt Sender …</small></div>
+      <button id="open-countries" class="map-btn" type="button"><span aria-hidden="true">🗺️</span> Länder</button>
+    </div>
+    <div id="map-card" class="map-card" hidden></div>
+    <section id="cpanel" class="cpanel" aria-label="Länder" hidden>
+      <header class="cp-head">
+        <button id="cp-back" class="cp-x" type="button" aria-label="Zurück" hidden>‹</button>
+        <h2 id="cp-title">Länder</h2>
+        <button id="cp-close" class="cp-x" type="button" aria-label="Schließen">×</button>
+      </header>
+      <div class="cp-search"><input id="cp-filter" class="field" type="search" placeholder="Land suchen" autocomplete="off" enterkeyhint="search"></div>
+      <div id="cp-body" class="cp-body"></div>
+    </section>
+  </main>
+
+  <!-- 2 · Zufallsreise -->
+  <main id="view-trip" class="view">
+    <h1 class="vh">Zufallsreise</h1>
+    <div id="genres" class="gbar" role="radiogroup" aria-label="Genre"></div>
+    <div id="feed" class="feed" aria-label="Sender-Feed"><div id="track"></div></div>
+  </main>
+
+  <!-- 3 · Favoriten & Suche -->
+  <section id="view-favs" class="view">
+    <header class="page-head">
+      <h1>Sender</h1>
+      <p id="favs-sub" class="sub"></p>
+    </header>
+    <div class="pad search">
+      <div class="search-row">
+        <input id="q" class="field" type="search" placeholder="Sendername suchen" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search">
+      </div>
+      <div id="s-genres" class="hchips"></div>
+      <select id="s-country" class="field select" aria-label="Land"><option value="">🌐 Alle Länder</option></select>
+    </div>
+    <h3 id="list-h" class="set-h list-h">Favoriten</h3>
+    <ul id="res-list" class="list"></ul>
+    <p id="res-empty" class="empty"></p>
+  </section>
+
+  <!-- 4 · Einstellungen -->
+  <section id="view-settings" class="view">
+    <header class="page-head">
+      <h1>Einstellungen</h1>
+      <p class="sub" id="stats"></p>
+    </header>
+    <div class="pad">
+      <h3 class="set-h">Wiedergabe</h3>
+      <div class="set-group">
+        <label class="set-row">
+          <span class="set-text"><b>Bei Funkstille weiter</b><small>In der Zufallsreise automatisch zum nächsten Sender, wenn einer nicht erreichbar ist.</small></span>
+          <input type="checkbox" id="autoskip" class="switch">
+        </label>
+        <label class="set-row">
+          <span class="set-text"><b>Aufrufe melden</b><small>Sagt Radio Browser anonym, welcher Sender gehört wird – so bleiben die Beliebtheitslisten aktuell.</small></span>
+          <input type="checkbox" id="count" class="switch">
+        </label>
+      </div>
+
+      <h3 class="set-h">Aussehen</h3>
+      <div class="set-group">
+        <div class="set-block">
+          <div class="set-label">Farbe</div>
+          <div id="theme-picks" class="theme-picks" role="radiogroup" aria-label="Farbe"></div>
+        </div>
+        <label class="set-row">
+          <span class="set-text"><b>Ruhige Darstellung</b><small>Weniger Bewegung, schont den Akku.</small></span>
+          <input type="checkbox" id="calm" class="switch">
+        </label>
+      </div>
+
+      <h3 class="set-h">Über diese App</h3>
+      <div class="set-group">
+        <details class="set-more">
+          <summary>Quellen</summary>
+          <p>Senderdaten kommen aus <b>Radio Browser</b>, einer freien, von der Community gepflegten Datenbank (radio-browser.info). Die Streams kommen direkt von den Sendern.</p>
+          <p>Karte: <b>Leaflet</b>, Kartenkacheln von <b>Esri</b> (Esri, HERE, Garmin, © OpenStreetMap-Mitwirkende).</p>
+          <p>Gezeigt werden nur Sender mit verschlüsselter Verbindung (https), die beim letzten Test erreichbar waren.</p>
+        </details>
+        <details class="set-more">
+          <summary>Datenschutz</summary>
+          <p>Keine Konten, keine Werbung, kein Tracking, kein eigener Server. Favoriten und Einstellungen bleiben nur auf diesem Gerät.</p>
+          <p>Dein Gerät fragt direkt bei Radio Browser, Esri (Kartenkacheln), unpkg (Kartenprogramm) und dem jeweiligen Sender an. Diese Dienste sehen dabei technisch deine IP-Adresse – wie bei jeder Website.</p>
+        </details>
+        <button id="wipe" class="set-row" type="button"><span class="set-text"><b class="danger">Alle Daten auf diesem Gerät löschen</b><small>Favoriten, Verlauf und Einstellungen.</small></span></button>
+      </div>
+      <p class="version">Weltradio · Version 1.0</p>
+    </div>
+  </section>
+
+  <!-- Mini-Player über der Leiste -->
+  <div id="mini" class="mini" hidden>
+    <button class="mini-main" data-a="goto" type="button" aria-label="Sender zeigen">
+      <span class="logo sm" id="mini-logo"></span>
+      <span class="mini-t"><b id="mini-name"></b><small id="mini-sub"></small></span>
+    </button>
+    <button class="mini-b fav" data-a="fav" type="button" aria-label="Favorit"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.6l2.6 5.3 5.8.8-4.2 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.2-4.1 5.8-.8z"/></svg></button>
+    <button class="mini-b play" data-a="play" type="button" aria-label="Abspielen"><i class="spin-s"></i><svg viewBox="0 0 24 24" class="i-play" aria-hidden="true"><path d="M7 4.8v14.4a1 1 0 0 0 1.5.86l12-7.2a1 1 0 0 0 0-1.72l-12-7.2A1 1 0 0 0 7 4.8z"/></svg><svg viewBox="0 0 24 24" class="i-pause" aria-hidden="true"><rect x="6" y="4.5" width="4.2" height="15" rx="1.2"/><rect x="13.8" y="4.5" width="4.2" height="15" rx="1.2"/></svg></button>
+  </div>
+
+  <nav class="tabbar">
+    <i class="tab-ind"></i>
+    <button data-view="map"><span><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.4 2.6 3.6 5.4 3.6 8.5s-1.2 5.9-3.6 8.5c-2.4-2.6-3.6-5.4-3.6-8.5S9.6 6.1 12 3.5z"/></svg></span><em>Karte</em></button>
+    <button data-view="trip"><span><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="4"/><circle cx="9" cy="9" r="1.1" fill="currentColor"/><circle cx="15" cy="15" r="1.1" fill="currentColor"/><circle cx="15" cy="9" r="1.1" fill="currentColor"/><circle cx="9" cy="15" r="1.1" fill="currentColor"/></svg></span><em>Zufallsreise</em></button>
+    <button data-view="favs"><span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.6l2.6 5.3 5.8.8-4.2 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.2-4.1 5.8-.8z"/></svg><b id="fav-count" class="badge" hidden></b></span><em>Sender</em></button>
+    <button data-view="settings"><span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h9M19 7h1M4 17h1M11 17h9"/><circle cx="16" cy="7" r="2.4"/><circle cx="8" cy="17" r="2.4"/></svg></span><em>Einstellungen</em></button>
+  </nav>
+
+  <div id="onboard" class="sheet" role="dialog" aria-modal="true" aria-labelledby="ob-title" hidden>
+    <div class="sheet-scroll">
+      <div class="ob">
+        <img src="icon.svg" alt="" width="76" height="76" class="ob-icon">
+        <h1 id="ob-title">Weltradio</h1>
+        <p class="sub">Live-Radio aus aller Welt – tausende Sender, direkt vom Sender zu dir.</p>
+        <div class="ob-card">
+          <b>🎲 Zufallsreise</b>
+          <p>Wische nach oben: Jeder Sender kommt aus einem anderen Land und spielt sofort.</p>
+        </div>
+        <div class="ob-card">
+          <b>🌍 Weltkarte</b>
+          <p>Jeder Punkt ist ein Sender. Antippen – und du hörst, was dort gerade läuft.</p>
+        </div>
+        <button id="ob-go" class="btn big" type="button">Tippen zum Starten</button>
+        <button id="ob-map" class="btn soft" type="button">Lieber erst die Karte</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
